@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # 1. PostgreSQL Database (Multi-DB Support)
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: aptly-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-multiple-dbs.sql:/docker-entrypoint-initdb.d/init-multiple-dbs.sql
+    networks:
+      - aptly-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # 2. Redis Cache & Rate Limiter
+  # ==========================================
+  redis:
+    image: redis:7.2-alpine
+    container_name: aptly-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    networks:
+      - aptly-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ==========================================
+  # 3. Apache Kafka & ZooKeeper (Event Broker)
+  # ==========================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: aptly-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - aptly-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: aptly-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    networks:
+      - aptly-net
+
+  # ==========================================
+  # 4. Keycloak (IAM & OAuth2 / OIDC Provider)
+  # ==========================================
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    container_name: aptly-keycloak
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak_db
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: password123
+    ports:
+      - "8180:8080"
+    command: ["start-dev"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - aptly-net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  aptly-net:
+    driver: bridge
